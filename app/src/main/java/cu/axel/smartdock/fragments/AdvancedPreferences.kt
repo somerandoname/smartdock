@@ -137,12 +137,31 @@ class AdvancedPreferences : PreferenceFragmentCompat() {
                 slider.stepSize = 1f
                 slider.value =
                     dockHeight.sharedPreferences!!.getString(dockHeight.key, "56")!!.toFloat()
-                slider.valueFrom = 50f
+                slider.valueFrom = 20f
                 slider.valueTo = 70f
                 slider.addOnChangeListener { _, value, _
                     ->
                     dockHeight.sharedPreferences!!.edit()
                         .putString(dockHeight.key, value.toInt().toString()).apply()
+                }
+            }
+        })
+
+        // --- Y Offset Slider ---
+        val dockYOffset = findPreference<SliderPreference>("dock_y_offset")!!
+        dockYOffset.setOnDialogShownListener(object : SliderPreference.OnDialogShownListener {
+            override fun onDialogShown() {
+                val slider = dockYOffset.slider
+                slider.isTickVisible = false
+                slider.labelBehavior = LabelFormatter.LABEL_GONE
+                slider.stepSize = 1f
+                slider.value =
+                    dockYOffset.sharedPreferences!!.getString(dockYOffset.key, "0")!!.toFloat()
+                slider.valueFrom = 0f
+                slider.valueTo = 50f
+                slider.addOnChangeListener { _, value, _ ->
+                    dockYOffset.sharedPreferences!!.edit()
+                        .putString(dockYOffset.key, value.toInt().toString()).apply()
                 }
             }
         })

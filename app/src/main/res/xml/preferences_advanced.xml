@@ -21,6 +21,12 @@
         android:key="dock_height"
         android:title="@string/dock_height" />
 
+    <cu.axel.smartdock.preferences.SliderPreference
+        android:defaultValue="0"
+        android:key="dock_y_offset"
+        android:title="Dock Y Offset"
+        android:summary="Distance from bottom of the screen (dp)"/>
+
     <cu.axel.smartdock.preferences.IconPackPreference
         android:key="icon_pack"
         android:title="@string/icon_pack" />

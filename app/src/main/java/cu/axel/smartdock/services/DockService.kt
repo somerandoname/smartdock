@@ -309,6 +309,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
 
         dockHeight =
             Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+        val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         dockLayoutParams = Utils.makeWindowParams(-1, dockHeight, context, secondary)
         dockLayoutParams.screenOrientation =
             if (sharedPreferences.getBoolean("lock_landscape", false))
@@ -317,6 +318,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 
         dockLayoutParams.gravity = Gravity.BOTTOM or Gravity.START
+        dockLayoutParams.y = dockYOffset
         windowManager.addView(dock, dockLayoutParams)
 
         //Hot corners
@@ -908,8 +910,11 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         dock.visibility = View.VISIBLE
         dockHandle.visibility = View.GONE
 
-        if (dockLayoutParams.height != dockHeight) {
+        // Update dock y-offset from preferences
+        val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
+        if (dockLayoutParams.height != dockHeight || dockLayoutParams.y != dockYOffset) {
             dockLayoutParams.height = dockHeight
+            dockLayoutParams.y = dockYOffset
             windowManager.updateViewLayout(dock, dockLayoutParams)
         }
 
@@ -1473,7 +1478,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             updateActivationMethod()
         } else if (preference == "handle_opacity")
             dockHandle.alpha = sharedPreferences.getString("handle_opacity", "0.5")!!.toFloat()
-        else if (preference == "dock_height")
+        else if (preference == "dock_height" || preference == "dock_y_offset")
             updateDockHeight()
         else if (preference == "handle_position")
             updateHandlePosition()
@@ -1504,10 +1509,12 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private fun updateDockHeight() {
         dockHeight =
             Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
-        if (isPinned) {
-            dockLayoutParams.height = dockHeight
-            windowManager.updateViewLayout(dock, dockLayoutParams)
-        }
+        val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
+        dockLayoutParams.height = dockHeight
+        dockLayoutParams.y = dockYOffset
+        windowManager.updateViewLayout(dock, dockLayoutParams)
+        handleLayoutParams.y = dockYOffset
+        windowManager.updateViewLayout(dockHandle, handleLayoutParams)
     }
 
     private fun placeRunningApps() {
