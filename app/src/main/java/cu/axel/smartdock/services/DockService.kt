@@ -1101,7 +1101,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                 context, secondary
             )
             layoutParams.x = margins
-            layoutParams.y = margins + dockHeight
+            val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
+            layoutParams.y = margins + dockHeight + dockYOffset
             appsGv.layoutManager = GridLayoutManager(
                 context,
                 sharedPreferences.getString("num_columns", "5")!!.toInt()
