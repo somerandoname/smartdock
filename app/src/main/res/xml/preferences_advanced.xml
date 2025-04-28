@@ -27,6 +27,18 @@
         android:title="Dock Y Offset"
         android:summary="Distance from bottom of the screen (dp)"/>
 
+    <cu.axel.smartdock.preferences.SliderPreference
+        android:defaultValue="48"
+        android:key="dock_icon_size"
+        android:title="Dock Icon Size"
+        android:summary="Size of app icons in the dock (dp)"/>
+
+    <cu.axel.smartdock.preferences.SliderPreference
+        android:defaultValue="4"
+        android:key="dock_icon_spacing"
+        android:title="Dock Icon Spacing"
+        android:summary="Spacing between app icons in the dock (dp)"/>
+
     <cu.axel.smartdock.preferences.IconPackPreference
         android:key="icon_pack"
         android:title="@string/icon_pack" />

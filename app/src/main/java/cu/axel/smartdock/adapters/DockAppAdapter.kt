@@ -52,6 +52,27 @@ class DockAppAdapter(
     override fun onBindViewHolder(viewHolder: ViewHolder, position: Int) {
         val app = apps[position]
         val size = app.tasks.size
+        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val iconSizeDp = sharedPreferences.getString("dock_icon_size", "48")!!.toInt()
+        val iconSpacingDp = sharedPreferences.getString("dock_icon_spacing", "4")!!.toInt()
+        val iconSizePx = Utils.dpToPx(context, iconSizeDp)
+        val iconSpacingPx = Utils.dpToPx(context, iconSpacingDp)
+        // Set icon size (width and height)
+        val iconLayoutParams = viewHolder.iconIv.layoutParams
+        iconLayoutParams.width = iconSizePx
+        iconLayoutParams.height = iconSizePx
+        viewHolder.iconIv.layoutParams = iconLayoutParams
+        // Set margin between icons (spacing)
+        val parent = viewHolder.iconIv.parent
+        if (parent is View) {
+            val params = parent.layoutParams
+            if (params is ViewGroup.MarginLayoutParams) {
+                params.marginStart = iconSpacingPx / 2
+                params.marginEnd = iconSpacingPx / 2
+                parent.layoutParams = params
+            }
+        }
+
         if (size > 0) {
             if (tintIndicators) ColorUtils.applyColor(
                 viewHolder.runningIndicator,

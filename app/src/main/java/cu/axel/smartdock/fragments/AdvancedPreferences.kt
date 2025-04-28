@@ -166,6 +166,44 @@ class AdvancedPreferences : PreferenceFragmentCompat() {
             }
         })
 
+        // --- Dock Icon Size Slider ---
+        val dockIconSize = findPreference<SliderPreference>("dock_icon_size")!!
+        dockIconSize.setOnDialogShownListener(object : SliderPreference.OnDialogShownListener {
+            override fun onDialogShown() {
+                val slider = dockIconSize.slider
+                slider.isTickVisible = false
+                slider.labelBehavior = LabelFormatter.LABEL_GONE
+                slider.stepSize = 1f
+                slider.value =
+                    dockIconSize.sharedPreferences!!.getString(dockIconSize.key, "48")!!.toFloat()
+                slider.valueFrom = 20f
+                slider.valueTo = 50f
+                slider.addOnChangeListener { _, value, _ ->
+                    dockIconSize.sharedPreferences!!.edit()
+                        .putString(dockIconSize.key, value.toInt().toString()).apply()
+                }
+            }
+        })
+
+        // --- Dock Icon Spacing Slider ---
+        val dockIconSpacing = findPreference<SliderPreference>("dock_icon_spacing")!!
+        dockIconSpacing.setOnDialogShownListener(object : SliderPreference.OnDialogShownListener {
+            override fun onDialogShown() {
+                val slider = dockIconSpacing.slider
+                slider.isTickVisible = false
+                slider.labelBehavior = LabelFormatter.LABEL_GONE
+                slider.stepSize = 1f
+                slider.value =
+                    dockIconSpacing.sharedPreferences!!.getString(dockIconSpacing.key, "4")!!.toFloat()
+                slider.valueFrom = 0f
+                slider.valueTo = 20f
+                slider.addOnChangeListener { _, value, _ ->
+                    dockIconSpacing.sharedPreferences!!.edit()
+                        .putString(dockIconSpacing.key, value.toInt().toString()).apply()
+                }
+            }
+        })
+
         val windowScale: EditTextPreference = findPreference("scale_factor")!!
         windowScale.setOnBindEditTextListener { editText ->
             editText.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
