@@ -199,6 +199,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         appsBtn = dock.findViewById(R.id.apps_btn)
         tasksGv = dock.findViewById(R.id.apps_lv)
         val layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
+        layoutManager.stackFromEnd = true
         tasksGv.layoutManager = layoutManager
         backBtn = dock.findViewById(R.id.back_btn)
         homeBtn = dock.findViewById(R.id.home_btn)
@@ -1445,7 +1446,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             applyTheme()
         else if (preference == "menu_icon_uri")
             updateMenuIcon()
-        else if (preference.startsWith("icon_")) {
+        else if (preference.startsWith("icon_") || preference == "dock_icon_size" || preference == "dock_icon_spacing") {
             val iconPack = sharedPreferences.getString("icon_pack", "")!!
             iconPackUtils = if (iconPack.isNotEmpty()) {
                 IconPackUtils(this)
@@ -1528,6 +1529,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         } else {
             layoutParams.addRule(RelativeLayout.END_OF, R.id.nav_panel)
             layoutParams.addRule(RelativeLayout.START_OF, R.id.system_tray)
+            layoutParams.addRule(RelativeLayout.CENTER_VERTICAL)
         }
         tasksGv.layoutParams = layoutParams
     }
@@ -1543,35 +1545,32 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         lastUpdate = now
 
         val apps = ArrayList<DockApp>()
-        pinnedApps.forEach { pinnedApp ->
-            apps.add(DockApp(pinnedApp.name, pinnedApp.packageName, pinnedApp.icon))
-        }
-
+        // 1. Add running/recent apps first (up to available slots)
         val gridSize = Utils.dpToPx(context, 52)
-
-        //TODO: We can eliminate another for
-        //TODO: Don't do anything if tasks has not changed
-        val nApps =
-            if (orientation == Configuration.ORIENTATION_PORTRAIT) maxApps else maxAppsLandscape
-        if (systemApp) {
-            tasks = AppUtils.getRunningTasks(activityManager, packageManager, nApps)
-            for (j in 1..tasks.size) {
-                val task = tasks[tasks.size - j]
-                val index = AppUtils.containsTask(apps, task)
-                if (index != -1)
-                    apps[index].addTask(task)
-                else
-                    apps.add(DockApp(task))
-            }
+        val nApps = if (orientation == Configuration.ORIENTATION_PORTRAIT) maxApps else maxAppsLandscape
+        val retrievalLimit = nApps + pinnedApps.size
+        val runningTasks = if (systemApp) {
+            AppUtils.getRunningTasks(activityManager, packageManager, retrievalLimit, context)
         } else {
-            tasks = AppUtils.getRecentTasks(context, nApps)
-            tasks.reversed().forEach { task ->
-                val index = AppUtils.containsTask(apps, task)
-                if (index == -1)
-                    apps.add(DockApp(task))
+            AppUtils.getRecentTasks(context, retrievalLimit)
+        }
+        val pinnedPackageNames = pinnedApps.map { it.packageName }
+        var added = 0
+        // Reverse runningTasks so most recent is added last (rightmost before pinned)
+        val nonPinnedTasks = runningTasks.filter { !pinnedPackageNames.contains(it.packageName) }
+            .take(nApps - pinnedApps.size)
+            .reversed()
+        for (task in nonPinnedTasks) {
+            apps.add(DockApp(task))
+        }
+        // 2. Add all pinned apps at the end
+        pinnedApps.forEach { pinnedApp ->
+            if (apps.size < nApps) {
+                apps.add(DockApp(pinnedApp.name, pinnedApp.packageName, pinnedApp.icon))
             }
         }
 
+        tasks = ArrayList(runningTasks.take(nApps))
         tasksGv.layoutParams.width = gridSize * apps.size
         tasksGv.adapter = DockAppAdapter(context, apps, this, iconPackUtils)
         //TODO: Move context outta here
