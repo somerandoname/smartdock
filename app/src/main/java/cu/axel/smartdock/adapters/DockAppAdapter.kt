@@ -25,6 +25,11 @@ class DockAppAdapter(
     private val iconTheming: Boolean
     private val tintIndicators: Boolean
 
+    // Icon box size and the gap between two icons, in pixels. DockService derives
+    // both from the dock height and sets them before the icons are bound.
+    var iconSizePx: Int = 0
+    var iconGapPx: Int = 0
+
     interface OnDockAppClickListener {
         fun onDockAppClicked(app: DockApp, view: View)
         fun onDockAppLongClicked(app: DockApp, view: View)
@@ -52,23 +57,18 @@ class DockAppAdapter(
     override fun onBindViewHolder(viewHolder: ViewHolder, position: Int) {
         val app = apps[position]
         val size = app.tasks.size
-        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
-        val iconSizeDp = sharedPreferences.getString("dock_icon_size", "48")!!.toInt()
-        val iconSpacingDp = sharedPreferences.getString("dock_icon_spacing", "4")!!.toInt()
-        val iconSizePx = Utils.dpToPx(context, iconSizeDp)
-        val iconSpacingPx = Utils.dpToPx(context, iconSpacingDp)
         // Set icon size (width and height)
         val iconLayoutParams = viewHolder.iconIv.layoutParams
         iconLayoutParams.width = iconSizePx
         iconLayoutParams.height = iconSizePx
         viewHolder.iconIv.layoutParams = iconLayoutParams
-        // Set margin between icons (spacing)
+        // Half the gap on each side of the icon
         val parent = viewHolder.iconIv.parent
         if (parent is View) {
             val params = parent.layoutParams
             if (params is ViewGroup.MarginLayoutParams) {
-                params.marginStart = iconSpacingPx / 4
-                params.marginEnd = iconSpacingPx / 4
+                params.marginStart = iconGapPx / 2
+                params.marginEnd = iconGapPx / 2
                 parent.layoutParams = params
             }
         }

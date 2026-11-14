@@ -167,17 +167,19 @@ class AdvancedPreferences : PreferenceFragmentCompat() {
         })
 
         // --- Dock Icon Size Slider ---
-        val dockIconSize = findPreference<SliderPreference>("dock_icon_size")!!
+        val dockIconSize = findPreference<SliderPreference>("dock_icon_size_percent")!!
         dockIconSize.setOnDialogShownListener(object : SliderPreference.OnDialogShownListener {
             override fun onDialogShown() {
                 val slider = dockIconSize.slider
                 slider.isTickVisible = false
                 slider.labelBehavior = LabelFormatter.LABEL_GONE
                 slider.stepSize = 1f
+                // Percent of the dock height
+                slider.valueFrom = 40f
+                slider.valueTo = 100f
                 slider.value =
-                    dockIconSize.sharedPreferences!!.getString(dockIconSize.key, "48")!!.toFloat()
-                slider.valueFrom = 20f
-                slider.valueTo = 50f
+                    dockIconSize.sharedPreferences!!.getString(dockIconSize.key, "85")!!.toFloat()
+                        .coerceIn(40f, 100f)
                 slider.addOnChangeListener { _, value, _ ->
                     dockIconSize.sharedPreferences!!.edit()
                         .putString(dockIconSize.key, value.toInt().toString()).apply()
@@ -186,17 +188,19 @@ class AdvancedPreferences : PreferenceFragmentCompat() {
         })
 
         // --- Dock Icon Spacing Slider ---
-        val dockIconSpacing = findPreference<SliderPreference>("dock_icon_spacing")!!
+        val dockIconSpacing = findPreference<SliderPreference>("dock_icon_gap_percent")!!
         dockIconSpacing.setOnDialogShownListener(object : SliderPreference.OnDialogShownListener {
             override fun onDialogShown() {
                 val slider = dockIconSpacing.slider
                 slider.isTickVisible = false
                 slider.labelBehavior = LabelFormatter.LABEL_GONE
                 slider.stepSize = 1f
+                // Percent of the dock height
+                slider.valueFrom = 0f
+                slider.valueTo = 200f
                 slider.value =
                     dockIconSpacing.sharedPreferences!!.getString(dockIconSpacing.key, "4")!!.toFloat()
-                slider.valueFrom = 0f
-                slider.valueTo = 20f
+                        .coerceIn(0f, 200f)
                 slider.addOnChangeListener { _, value, _ ->
                     dockIconSpacing.sharedPreferences!!.edit()
                         .putString(dockIconSpacing.key, value.toInt().toString()).apply()

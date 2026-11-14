@@ -414,6 +414,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         dockHeight =
             computeDockHeight()
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
+        migrateDockIconPreferences()
         dockLayoutParams = Utils.makeWindowParams(-1, dockHeight, context, secondary)
         dockLayoutParams.screenOrientation =
             if (sharedPreferences.getBoolean("lock_landscape", false))
@@ -719,6 +720,50 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         else Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
     }
 
+    // Dock icons and the gaps between them are percentages of the dock height, so
+    // they scale together when the dock follows the navigation bar.
+    private fun dockIconSizePx(): Int {
+        val percent = sharedPreferences.getString("dock_icon_size_percent", "85")!!.toInt()
+        return (dockHeight * percent / 100).coerceIn(1, dockHeight.coerceAtLeast(1))
+    }
+
+    private fun dockIconGapPx(): Int {
+        val percent = sharedPreferences.getString("dock_icon_gap_percent", "4")!!.toInt()
+        return (dockHeight * percent / 100).coerceAtLeast(0)
+    }
+
+    // One-time conversion of the old dp based icon size and spacing settings,
+    // keeping the dock looking the way it did
+    private fun migrateDockIconPreferences() {
+        if (dockHeight <= 0) return
+        val editor = sharedPreferences.edit()
+        var changed = false
+        if (!sharedPreferences.contains("dock_icon_size_percent")) {
+            val oldSizePx = Utils.dpToPx(
+                context, sharedPreferences.getString("dock_icon_size", "48")!!.toInt()
+            )
+            val percent = Math.round(oldSizePx * 100f / dockHeight).coerceIn(40, 100)
+            editor.putString("dock_icon_size_percent", percent.toString())
+            changed = true
+        }
+        if (!sharedPreferences.contains("dock_icon_gap_percent")) {
+            val oldSpacingPx = Utils.dpToPx(
+                context, sharedPreferences.getString("dock_icon_spacing", "4")!!.toInt()
+            )
+            // The old setting applied a quarter of its value on each side of an icon
+            val oldGapPx = 2 * (oldSpacingPx / 4)
+            val percent = Math.round(oldGapPx * 100f / dockHeight).coerceIn(0, 200)
+            editor.putString("dock_icon_gap_percent", percent.toString())
+            changed = true
+        }
+        if (changed) {
+            // Runs during startup, before the dock can react to preference changes
+            sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
+            editor.remove("dock_icon_size").remove("dock_icon_spacing").commit()
+            sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+        }
+    }
+
     // Resize a dock that is already showing after the navigation bar changed size
     private fun syncDockHeight() {
         val newHeight = computeDockHeight()
@@ -732,6 +777,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             }
             updateDockBackgroundViewHeight()
         } catch (_: Exception) {}
+        // Icon size and gaps are derived from the dock height
+        updateRunningTasks()
     }
 
     // On a side edge the dock strip is turned so it looks the same as in portrait
@@ -2062,7 +2109,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             applyTheme()
         else if (preference == "menu_icon_uri")
             updateMenuIcon()
-        else if (preference.startsWith("icon_") || preference == "dock_icon_size" || preference == "dock_icon_spacing") {
+        else if (preference.startsWith("icon_") || preference.startsWith("dock_icon_")) {
             val iconPack = sharedPreferences.getString("icon_pack", "")!!
             iconPackUtils = if (iconPack.isNotEmpty()) {
                 IconPackUtils(this)
@@ -2195,7 +2242,11 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
 
         val apps = ArrayList<DockApp>()
         // 1. Add running/recent apps first (up to available slots)
-        val gridSize = Utils.dpToPx(context, 52)
+        // Width of one dock slot, matching what DockAppAdapter lays out: the icon
+        // plus half the gap on each side
+        val iconSizePx = dockIconSizePx()
+        val iconGapPx = dockIconGapPx()
+        val gridSize = iconSizePx + 2 * (iconGapPx / 2)
         // A side-edge dock is as long as the dock in portrait
         val nApps = if (orientation == Configuration.ORIENTATION_PORTRAIT || dockEdge != DockEdge.BOTTOM) maxApps else maxAppsLandscape
         val retrievalLimit = nApps + pinnedApps.size
@@ -2226,9 +2277,14 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         // Reuse existing adapter if possible to avoid full RecyclerView refresh
         val existingAdapter = tasksGv.adapter
         if (existingAdapter is DockAppAdapter) {
+            existingAdapter.iconSizePx = iconSizePx
+            existingAdapter.iconGapPx = iconGapPx
             existingAdapter.updateApps(apps)
         } else {
-            tasksGv.adapter = DockAppAdapter(context, apps, this, iconPackUtils)
+            tasksGv.adapter = DockAppAdapter(context, apps, this, iconPackUtils).also {
+                it.iconSizePx = iconSizePx
+                it.iconGapPx = iconGapPx
+            }
         }
         
         // Reset scroll position to the rightmost (last position) to show newest apps
