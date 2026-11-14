@@ -188,82 +188,113 @@ object AppUtils {
     }
 
     fun getRunningTasks(
-        activityManager: ActivityManager, packageManager: PackageManager, max: Int, context: Context
+        activityManager: ActivityManager,
+        packageManager: PackageManager,
+        max: Int,
+        context: Context
     ): ArrayList<AppTask> {
+
         val tasksInfo = activityManager.getRunningTasks(max)
-        currentApp = tasksInfo[0].baseActivity!!.packageName
+        if (tasksInfo.isEmpty()) return arrayListOf()
+
+        val appTasks = ArrayList<AppTask>(max)
+        val seenPackages = HashSet<String>(max)
         val hiddenApps = getHiddenApps(context)
-        val appTasks = ArrayList<AppTask>()
+        val launcherPackage = getCurrentLauncher(packageManager)
+
+        currentApp = tasksInfo[0].baseActivity?.packageName.orEmpty()
+
         for (taskInfo in tasksInfo) {
-            try {
-                //Exclude systemui, launcher and other system apps from the tasklist
-                if (taskInfo.baseActivity!!.packageName.contains("com.android.systemui") || taskInfo.baseActivity!!.packageName.contains(
-                        "com.google.android.packageinstaller"
-                    ) || taskInfo.baseActivity!!.className == "com.android.quickstep.RecentsActivity"
-                ) continue
+            val baseActivity = taskInfo.baseActivity ?: continue
+            val topActivity = taskInfo.topActivity ?: continue
 
-                //Hack to save Dock settings activity from being excluded
-                if (!(taskInfo.topActivity!!.className == "cu.axel.smartdock.activities.MainActivity" || taskInfo.topActivity!!.className == "cu.axel.smartdock.activities.DebugActivity") && taskInfo.topActivity!!.packageName == getCurrentLauncher(
-                        packageManager
-                    )
-                ) continue
+            val basePackage = baseActivity.packageName
+            val topPackage = topActivity.packageName
+            val topClass = topActivity.className
 
-                // Exclude hidden apps
-                if (hiddenApps.contains(taskInfo.topActivity!!.packageName)) continue
+            // Skip system UI and system-related apps
+            if (
+                basePackage.contains("com.android.systemui") ||
+                basePackage.contains("com.google.android.packageinstaller") ||
+                baseActivity.className == "com.android.quickstep.RecentsActivity"
+            ) continue
 
-                if (Build.VERSION.SDK_INT > 29) {
-                    try {
-                        val isRunning = taskInfo.javaClass.getField("isRunning")
-                        val running = isRunning.getBoolean(taskInfo)
-                        if (!running) continue
-                    } catch (_: Exception) {
-                    }
+            // Skip if not a custom dock activity and is a launcher
+            val isDockActivity = topClass == "cu.axel.smartdock.activities.MainActivity" ||
+                    topClass == "cu.axel.smartdock.activities.DebugActivity"
+
+            if (!isDockActivity && topPackage == launcherPackage) continue
+
+            // Skip hidden apps
+            if (hiddenApps.contains(topPackage)) continue
+
+            // Skip duplicates
+            if (!seenPackages.add(topPackage)) continue
+
+            // Optional: check for isRunning field in Android 10+
+            if (Build.VERSION.SDK_INT > 29) {
+                try {
+                    val isRunningField = taskInfo.javaClass.getField("isRunning")
+                    if (!isRunningField.getBoolean(taskInfo)) continue
+                } catch (_: Exception) {
+                    // Field might not exist, ignore
                 }
-                appTasks.add(
-                    AppTask(
-                        taskInfo.id,
-                        packageManager.getActivityInfo(taskInfo.topActivity!!, 0)
-                            .loadLabel(packageManager).toString(),
-                        taskInfo.topActivity!!.packageName,
-                        packageManager.getActivityIcon(taskInfo.topActivity!!)
-                    )
-                )
+            }
+
+            try {
+                val activityInfo = packageManager.getActivityInfo(topActivity, 0)
+                val label = activityInfo.loadLabel(packageManager).toString()
+                val icon = packageManager.getActivityIcon(topActivity)
+
+                appTasks.add(AppTask(taskInfo.id, label, topPackage, icon))
             } catch (_: PackageManager.NameNotFoundException) {
+                // Skip broken or unresolvable apps
             }
         }
+
         return appTasks
     }
 
     fun getRecentTasks(context: Context, max: Int): ArrayList<AppTask> {
-        val ignoredApps =
-            listOf<String>(context.packageName, getCurrentLauncher(context.packageManager))
-        val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val start = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+        val packageManager = context.packageManager
+        val ignoredApps = setOf(context.packageName, getCurrentLauncher(packageManager))
         val hiddenApps = getHiddenApps(context)
-        val usageStats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_BEST, start, System.currentTimeMillis()
-        ).sortedWith(compareByDescending { it.lastTimeUsed })
-            .filterNot { ignoredApps.contains(it.packageName) || hiddenApps.contains(it.packageName) }
-        val appTasks = ArrayList<AppTask>()
-        if (usageStats.isNotEmpty())
-            currentApp = usageStats[0].packageName
-        for (stat in usageStats) {
-            val app = stat.packageName
+
+        val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val bootTime = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+
+        val recentApps = usageStatsManager.queryUsageStats(
+            UsageStatsManager.INTERVAL_BEST, bootTime, System.currentTimeMillis()
+        )
+            .asSequence()
+            .sortedByDescending { it.lastTimeUsed }
+            .filter { it.packageName !in ignoredApps && it.packageName !in hiddenApps }
+
+        val appTasks = ArrayList<AppTask>(max)
+        val seenPackages = HashSet<String>()
+
+        for (stat in recentApps) {
+            val packageName = stat.packageName
+            if (packageName in seenPackages) continue
+            if (!isLaunchable(context, packageName)) continue
+
             try {
-                if (isLaunchable(context, app)) {
-                    appTasks.add(
-                        AppTask(
-                            -1,
-                            getPackageLabel(context, app),
-                            app,
-                            context.packageManager.getApplicationIcon(app)
-                        )
-                    )
-                }
+                val label = getPackageLabel(context, packageName)
+                val icon = packageManager.getApplicationIcon(packageName)
+                appTasks.add(AppTask(-1, label, packageName, icon))
+                seenPackages.add(packageName)
             } catch (_: PackageManager.NameNotFoundException) {
+                // Skip invalid package
             }
+
             if (appTasks.size >= max) break
         }
+
+        // Update currentApp if at least one valid stat exists
+        recentApps.firstOrNull()?.let {
+            currentApp = it.packageName
+        }
+
         return appTasks
     }
 

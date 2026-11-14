@@ -17,7 +17,7 @@ import cu.axel.smartdock.utils.IconPackUtils
 import cu.axel.smartdock.utils.Utils
 
 class DockAppAdapter(
-    private val context: Context, private val apps: ArrayList<DockApp>,
+    private val context: Context, private var apps: ArrayList<DockApp>,
     private val listener: OnDockAppClickListener, private val iconPackUtils: IconPackUtils?
 ) : RecyclerView.Adapter<DockAppAdapter.ViewHolder>() {
     private var iconBackground = 0
@@ -45,13 +45,36 @@ class DockAppAdapter(
 
     override fun onCreateViewHolder(parent: ViewGroup, arg1: Int): ViewHolder {
         val itemLayoutView =
-            LayoutInflater.from(parent.context).inflate(R.layout.app_task_entry, null)
+            LayoutInflater.from(parent.context).inflate(R.layout.app_task_entry, parent, false)
         return ViewHolder(itemLayoutView)
     }
 
     override fun onBindViewHolder(viewHolder: ViewHolder, position: Int) {
         val app = apps[position]
         val size = app.tasks.size
+        val sharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
+        val iconSizeDp = sharedPreferences.getString("dock_icon_size", "48")!!.toInt()
+        val iconSpacingDp = sharedPreferences.getString("dock_icon_spacing", "4")!!.toInt()
+        val iconSizePx = Utils.dpToPx(context, iconSizeDp)
+        val iconSpacingPx = Utils.dpToPx(context, iconSpacingDp)
+        // Set icon size (width and height)
+        val iconLayoutParams = viewHolder.iconIv.layoutParams
+        iconLayoutParams.width = iconSizePx
+        iconLayoutParams.height = iconSizePx
+        viewHolder.iconIv.layoutParams = iconLayoutParams
+        // Set margin between icons (spacing)
+        val parent = viewHolder.iconIv.parent
+        if (parent is View) {
+            val params = parent.layoutParams
+            if (params is ViewGroup.MarginLayoutParams) {
+                params.marginStart = iconSpacingPx / 4
+                params.marginEnd = iconSpacingPx / 4
+                parent.layoutParams = params
+            }
+        }
+        // Do NOT set icon padding based on spacing, only use iconPadding if needed for theming
+        // (handled below in the iconBackground block)
+
         if (size > 0) {
             if (tintIndicators) ColorUtils.applyColor(
                 viewHolder.runningIndicator,
@@ -83,6 +106,12 @@ class DockAppAdapter(
 
     override fun getItemCount(): Int {
         return apps.size
+    }
+
+    fun updateApps(newApps: List<DockApp>) {
+        this.apps.clear()
+        this.apps.addAll(newApps)
+        notifyDataSetChanged()
     }
 
     class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {

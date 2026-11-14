@@ -49,11 +49,11 @@ class DockPreferences : PreferenceFragmentCompat() {
                 val slider = handleOpacity.slider
                 slider.isTickVisible = false
                 slider.labelBehavior = LabelFormatter.LABEL_GONE
-                slider.stepSize = 0.1f
+                slider.stepSize = 0.05f
                 slider.value =
                     handleOpacity.sharedPreferences!!.getString(handleOpacity.key, "0.5f")!!
                         .toFloat()
-                slider.valueFrom = 0.2f
+                slider.valueFrom = 0.0f
                 slider.valueTo = 1f
                 slider.addOnChangeListener { _, value, _ ->
                     handleOpacity.sharedPreferences!!.edit()

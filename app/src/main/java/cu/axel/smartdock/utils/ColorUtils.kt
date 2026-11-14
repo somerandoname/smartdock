@@ -146,10 +146,10 @@ object ColorUtils {
     }
 
     fun applyMainColor(context: Context, sp: SharedPreferences, view: View) {
-        val colors = getMainColors(sp, context)
-        applyColor(view, colors[0])
-        view.background.alpha = colors[1]
-    }
+            val colors = getMainColors(sp, context)
+            applyColor(view, colors[0])
+            view.background.alpha = colors[1]
+        }
 
     fun applySecondaryColor(context: Context, sp: SharedPreferences, view: View) {
         val colors = getMainColors(sp, context)

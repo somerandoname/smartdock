@@ -140,9 +140,14 @@ object Utils {
         layoutParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         layoutParams.type =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             else
                 WindowManager.LayoutParams.TYPE_PHONE
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            layoutParams.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        
         layoutParams.width = displayWidth.coerceAtMost(width)
         layoutParams.height = displayHeight.coerceAtMost(height)
         return layoutParams
