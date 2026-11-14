@@ -27,6 +27,7 @@ import android.content.pm.ShortcutInfo
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Matrix
+import android.graphics.Rect
 import android.hardware.usb.UsbManager
 import android.hardware.display.DisplayManager
 import android.media.AudioManager
@@ -288,6 +289,12 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         dateTv = dock.findViewById(R.id.date_btn)
         dateTv.format12Hour = "h:mm:ss a\nEE, dd."
         dateTv.format24Hour = "HH:mm:ss\nEE, dd."
+        val navPanel = dock.findViewById<View>(R.id.nav_panel)
+        dock.viewTreeObserver.addOnGlobalLayoutListener {
+            val shift = dateInkOffset().toFloat()
+            if (navPanel.translationY != shift) navPanel.translationY = shift
+            if (tasksGv.translationY != shift) tasksGv.translationY = shift
+        }
         dock.setOnHoverListener { v, event ->
             if (event.action == MotionEvent.ACTION_HOVER_ENTER) {
                 if (dockLayout.visibility == View.GONE) showDock()
@@ -722,6 +729,29 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
 
     // Dock icons and the gaps between them are percentages of the dock height, so
     // they scale together when the dock follows the navigation bar.
+    // How far the visible text of the date sits below the vertical centre of the
+    // dock. A font reserves more room above a line than below it, so centred text
+    // looks low; the menu button and app icons are shifted by this to line up.
+    private fun dateInkOffset(): Int {
+        val layout = dateTv.layout
+        if (dateTv.visibility != View.VISIBLE || layout == null || layout.lineCount == 0
+            || dateTv.height == 0
+        ) return 0
+        val text = dateTv.text.toString()
+        val first = 0
+        val last = layout.lineCount - 1
+        val bounds = Rect()
+        dateTv.paint.getTextBounds(
+            text, layout.getLineStart(first), layout.getLineVisibleEnd(first), bounds
+        )
+        val inkTop = dateTv.getLineBounds(first, null) + bounds.top
+        dateTv.paint.getTextBounds(
+            text, layout.getLineStart(last), layout.getLineVisibleEnd(last), bounds
+        )
+        val inkBottom = dateTv.getLineBounds(last, null) + bounds.bottom
+        return Math.round((inkTop + inkBottom) / 2f - dateTv.height / 2f)
+    }
+
     private fun dockIconSizePx(): Int {
         val percent = sharedPreferences.getString("dock_icon_size_percent", "85")!!.toInt()
         return (dockHeight * percent / 100).coerceIn(1, dockHeight.coerceAtLeast(1))
