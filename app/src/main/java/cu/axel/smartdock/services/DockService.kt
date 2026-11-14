@@ -26,6 +26,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.graphics.Matrix
 import android.hardware.usb.UsbManager
 import android.hardware.display.DisplayManager
 import android.media.AudioManager
@@ -191,6 +192,10 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private lateinit var navBarSensor: View
     private var navBarVisible = true
     private var pendingDockRemoval = false
+    private enum class DockEdge { BOTTOM, LEFT, RIGHT }
+    private var dockEdge = DockEdge.BOTTOM
+    private var displayListener: DisplayManager.DisplayListener? = null
+    private var handleEdgeOffset = 0
     override fun onCreate() {
         super.onCreate()
         db = DBHelper(this)
@@ -439,6 +444,18 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         setupNavBarSensor()
         updateDockViews()
 
+        displayListener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                // Flipping between the two landscape directions moves the navigation
+                // bar to the other side without any configuration change
+                if (computeDockEdge() != dockEdge) resetDockForRotation()
+            }
+        }
+        (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
+            .registerDisplayListener(displayListener, dockHandler)
+
         //Hot corners
         topRightCorner = Button(context)
         topRightCorner.setBackgroundResource(R.drawable.corner_background)
@@ -667,6 +684,102 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             Toast.makeText(context, R.string.start_message, Toast.LENGTH_LONG).show()
     }
 
+    // The dock sits on the same screen edge as the system navigation bar: the bottom
+    // in portrait, and whichever side the bar moves to in landscape.
+    private fun computeDockEdge(): DockEdge {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val insets = windowManager.currentWindowMetrics.windowInsets
+                    .getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
+                if (insets.left > 0) return DockEdge.LEFT
+                if (insets.right > 0) return DockEdge.RIGHT
+            } catch (_: Exception) {}
+        }
+        return DockEdge.BOTTOM
+    }
+
+    // On a side edge the dock strip is turned so it looks the same as in portrait
+    private fun refreshDockEdge() {
+        dockEdge = computeDockEdge()
+        dock.contentRotation = when (dockEdge) {
+            DockEdge.BOTTOM -> 0
+            DockEdge.LEFT -> 90
+            DockEdge.RIGHT -> -90
+        }
+    }
+
+    private fun dockOffsetPx(): Int =
+        Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
+
+    // Thickness is the window size across the edge, offset its distance from the edge
+    private fun placeOnDockEdge(params: WindowManager.LayoutParams, thickness: Int, offset: Int) {
+        when (dockEdge) {
+            DockEdge.BOTTOM -> {
+                params.gravity = Gravity.BOTTOM or Gravity.START
+                params.width = WindowManager.LayoutParams.MATCH_PARENT
+                params.height = thickness
+                params.x = 0
+                params.y = offset
+            }
+            else -> {
+                params.gravity = Gravity.TOP or
+                        if (dockEdge == DockEdge.LEFT) Gravity.LEFT else Gravity.RIGHT
+                params.width = thickness
+                params.height = WindowManager.LayoutParams.MATCH_PARENT
+                params.x = offset
+                params.y = 0
+            }
+        }
+    }
+
+    private fun setEdgeThickness(params: WindowManager.LayoutParams, thickness: Int) {
+        if (dockEdge == DockEdge.BOTTOM) params.height = thickness else params.width = thickness
+    }
+
+    private fun getEdgeThickness(params: WindowManager.LayoutParams): Int =
+        if (dockEdge == DockEdge.BOTTOM) params.height else params.width
+
+    private fun setEdgeOffset(params: WindowManager.LayoutParams, offset: Int) {
+        if (dockEdge == DockEdge.BOTTOM) params.y = offset else params.x = offset
+    }
+
+    // Popups are positioned for a bottom dock. With the dock on a side edge, move them
+    // next to it instead. The start of the dock is at the bottom of a right-edge dock
+    // and at the top of a left-edge one.
+    private fun placePopupBesideDock(params: WindowManager.LayoutParams, anchor: View? = null) {
+        if (dockEdge == DockEdge.BOTTOM) return
+        val margin = Utils.dpToPx(context, 2)
+        val side = if (dockEdge == DockEdge.LEFT) Gravity.LEFT else Gravity.RIGHT
+        val horizontal = Gravity.getAbsoluteGravity(
+            params.gravity, resources.configuration.layoutDirection
+        ) and Gravity.HORIZONTAL_GRAVITY_MASK
+        params.x = dockHeight + dockOffsetPx() + margin
+        if (anchor != null) {
+            val location = IntArray(2)
+            anchor.getLocationOnScreen(location)
+            // The anchor is turned with the dock, so on a right-edge dock its origin is its bottom corner
+            val top = if (dockEdge == DockEdge.RIGHT) location[1] - anchor.width else location[1]
+            params.gravity = Gravity.TOP or side
+            params.y = top.coerceAtLeast(0)
+        } else if (horizontal == Gravity.CENTER_HORIZONTAL) {
+            params.gravity = Gravity.CENTER_VERTICAL or side
+            params.y = 0
+        } else {
+            val atDockStart = horizontal != Gravity.RIGHT
+            val atBottom = atDockStart == (dockEdge == DockEdge.RIGHT)
+            params.gravity = (if (atBottom) Gravity.BOTTOM else Gravity.TOP) or side
+            params.y = margin
+        }
+    }
+
+    private fun resetDockForRotation() {
+        val wasVisible = (dockLayout.visibility == View.VISIBLE || isPinned)
+        hideDockInstantly()
+        if (wasVisible) {
+            dockHandler.postDelayed({ showDock() }, 150)
+        }
+    }
+
     // Helper methods to update the view
     private fun calculateDockBackgroundViewHeight(): Int {
         val currentDockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
@@ -674,7 +787,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     }
 
     private fun updateDockBackgroundViewHeight() {
-        dockBackgroundViewParams.height = calculateDockBackgroundViewHeight()
+        setEdgeThickness(dockBackgroundViewParams, calculateDockBackgroundViewHeight())
         windowManager.updateViewLayout(dockBackgroundView, dockBackgroundViewParams)
     }
 
@@ -727,6 +840,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             val location = IntArray(2)
             anchor.getLocationOnScreen(location)
             layoutParams.x = location[0]
+            placePopupBesideDock(layoutParams, anchor)
             view.setOnTouchListener { _, event ->
                 if (event.action == MotionEvent.ACTION_OUTSIDE) {
                     windowManager.removeView(view)
@@ -938,7 +1052,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private fun showToast(app: String, text: String) {
         val layoutParams = Utils.makeWindowParams(-2, -2, context, secondary)
         layoutParams.gravity = Gravity.BOTTOM or Gravity.CENTER
-        layoutParams.y = dock.measuredHeight + Utils.dpToPx(context, 4)
+        layoutParams.y = (if (dockEdge == DockEdge.BOTTOM) dock.measuredHeight else 0) +
+                Utils.dpToPx(context, 4)
         val toast = LayoutInflater.from(context).inflate(R.layout.toast, null)
         ColorUtils.applyMainColor(context, sharedPreferences, toast)
         val textTv = toast.findViewById<TextView>(R.id.toast_tv)
@@ -1210,16 +1325,13 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         
         // Ensure background dimension is synced for coordination (without immediately firing updateViewLayout)
-        dockBackgroundViewParams.height = calculateDockBackgroundViewHeight()
-        val bgHeight = dockBackgroundViewParams.height
+        refreshDockEdge()
+        val bgHeight = calculateDockBackgroundViewHeight()
 
         // Prepare for animation by setting starting position (off-screen below the bottom)
-        dockLayoutParams.gravity = Gravity.BOTTOM or Gravity.START
-        dockLayoutParams.height = dockHeight
-        dockLayoutParams.y = -dockHeight // Start off-screen
+        placeOnDockEdge(dockLayoutParams, dockHeight, -dockHeight) // Start off-screen
         
-        dockBackgroundViewParams.gravity = Gravity.BOTTOM or Gravity.START
-        dockBackgroundViewParams.y = -bgHeight // Start off-screen
+        placeOnDockEdge(dockBackgroundViewParams, bgHeight, -bgHeight) // Start off-screen
 
         val dockOriginalFlags = dockLayoutParams.flags
         val bgOriginalFlags = dockBackgroundViewParams.flags
@@ -1264,8 +1376,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                     return@addUpdateListener
                 }
 
-                dockLayoutParams.y = y
-                dockBackgroundViewParams.y = bgY
+                setEdgeOffset(dockLayoutParams, y)
+                setEdgeOffset(dockBackgroundViewParams, bgY)
                 try {
                     if (dockChanged) {
                         windowManager.updateViewLayout(dock, dockLayoutParams)
@@ -1300,11 +1412,9 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         ensureDockAnimationsLoaded()
 
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
-        val bgHeight = dockBackgroundViewParams.height
+        val bgHeight = getEdgeThickness(dockBackgroundViewParams)
 
-        // Consistent base settings (BOTTOM gravity)
-        dockLayoutParams.gravity = Gravity.BOTTOM or Gravity.START
-        dockBackgroundViewParams.gravity = Gravity.BOTTOM or Gravity.START
+        // Gravity and edge were set when the dock was shown; only the offset animates
 
         val dockOriginalFlags = dockLayoutParams.flags
         val bgOriginalFlags = dockBackgroundViewParams.flags
@@ -1337,8 +1447,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                     return@addUpdateListener
                 }
 
-                dockLayoutParams.y = y
-                dockBackgroundViewParams.y = bgY
+                setEdgeOffset(dockLayoutParams, y)
+                setEdgeOffset(dockBackgroundViewParams, bgY)
                 try {
                     if (dockChanged) {
                         windowManager.updateViewLayout(dock, dockLayoutParams)
@@ -1357,7 +1467,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                     
                     if (sharedPreferences.getString("activation_method", "swipe") == "swipe") {
                         val activationAreaVal = sharedPreferences.getString("dock_activation_area", "10")!!.toInt()
-                        dockLayoutParams.height = Utils.dpToPx(context, activationAreaVal)
+                        setEdgeThickness(dockLayoutParams, Utils.dpToPx(context, activationAreaVal))
                     } else {
                         dock.visibility = View.GONE
                         if (!sharedPreferences.getBoolean("hide_dock_handle", false)) {
@@ -1366,10 +1476,10 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                     }
 
                     // Restore original flags and state
-                    dockLayoutParams.y = dockYOffset
+                    setEdgeOffset(dockLayoutParams, dockYOffset)
                     dockLayoutParams.flags = dockOriginalFlags
                     
-                    dockBackgroundViewParams.y = 0
+                    setEdgeOffset(dockBackgroundViewParams, 0)
                     dockBackgroundViewParams.flags = bgOriginalFlags
                     
                     try {
@@ -1564,6 +1674,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             )
         ) Gravity.CENTER_HORIZONTAL else Gravity.START
         layoutParams.gravity = Gravity.BOTTOM or halign
+        placePopupBesideDock(layoutParams)
         ColorUtils.applyMainColor(context, sharedPreferences, appMenu)
         ColorUtils.applyColor(appsSeparator, ColorUtils.getMainColors(sharedPreferences, this)[4])
         windowManager.addView(appMenu, layoutParams)
@@ -1849,6 +1960,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val location = IntArray(2)
         anchor.getLocationOnScreen(location)
         layoutParams.x = location[0]
+        placePopupBesideDock(layoutParams, anchor)
         view.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_OUTSIDE)
                 windowManager.removeView(view)
@@ -1958,7 +2070,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private fun updateDockTrigger() {
         if (!isPinned) {
             val height = sharedPreferences.getString("dock_activation_area", "10")!!.toInt()
-            dockLayoutParams.height = Utils.dpToPx(context, height)
+            setEdgeThickness(dockLayoutParams, Utils.dpToPx(context, height))
             windowManager.updateViewLayout(dock, dockLayoutParams)
         }
     }
@@ -1981,11 +2093,12 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         dockHeight =
             Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
-        dockLayoutParams.height = dockHeight
-        dockLayoutParams.y = dockYOffset
+        setEdgeThickness(dockLayoutParams, dockHeight)
+        setEdgeOffset(dockLayoutParams, dockYOffset)
         windowManager.updateViewLayout(dock, dockLayoutParams)
         // Update the dock handle (pin) position as well
-        handleLayoutParams.y = dockYOffset
+        handleEdgeOffset = dockYOffset
+        updateHandlePositionValues()
         windowManager.updateViewLayout(dockHandle, handleLayoutParams)
 
         // Update dock background view
@@ -2046,7 +2159,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val apps = ArrayList<DockApp>()
         // 1. Add running/recent apps first (up to available slots)
         val gridSize = Utils.dpToPx(context, 52)
-        val nApps = if (orientation == Configuration.ORIENTATION_PORTRAIT) maxApps else maxAppsLandscape
+        // A side-edge dock is as long as the dock in portrait
+        val nApps = if (orientation == Configuration.ORIENTATION_PORTRAIT || dockEdge != DockEdge.BOTTOM) maxApps else maxAppsLandscape
         val retrievalLimit = nApps + pinnedApps.size
         val runningTasks = if (systemApp) {
             AppUtils.getRunningTasks(activityManager, packageManager, retrievalLimit, context)
@@ -2142,13 +2256,13 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         val activationAreaVal = sharedPreferences.getString("dock_activation_area", "10")!!.toInt()
         
-        dockLayoutParams.height = Utils.dpToPx(context, activationAreaVal)
-        dockLayoutParams.y = dockYOffset
-        dockLayoutParams.gravity = Gravity.BOTTOM or Gravity.START
+        refreshDockEdge()
+        placeOnDockEdge(dockLayoutParams, Utils.dpToPx(context, activationAreaVal), dockYOffset)
         
-        dockBackgroundViewParams.height = calculateDockBackgroundViewHeight()
-        dockBackgroundViewParams.y = 0
-        dockBackgroundViewParams.gravity = Gravity.BOTTOM or Gravity.START
+        placeOnDockEdge(dockBackgroundViewParams, calculateDockBackgroundViewHeight(), 0)
+        try {
+            updateHandlePosition()
+        } catch (_: Exception) {}
         
         try {
             windowManager.updateViewLayout(dock, dockLayoutParams)
@@ -2277,6 +2391,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         layoutParams.y = Utils.dpToPx(context, 2) + dockHeight
         layoutParams.x = Utils.dpToPx(context, 2)
         layoutParams.gravity = Gravity.BOTTOM or Gravity.END
+        placePopupBesideDock(layoutParams)
         audioPanel = LayoutInflater.from(ContextThemeWrapper(context, R.style.AppTheme_Dock))
             .inflate(R.layout.audio_panel, null) as LinearLayout
         audioPanel!!.setOnTouchListener { _, event ->
@@ -2436,6 +2551,16 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val position = sharedPreferences.getString("handle_position", "start")
         handleLayoutParams.gravity =
             Gravity.BOTTOM or if (position == "start") Gravity.START else Gravity.END
+        handleLayoutParams.x = 0
+        handleLayoutParams.y = handleEdgeOffset
+        if (dockEdge != DockEdge.BOTTOM) {
+            // Keep the handle at the same physical corner as in portrait
+            val atBottom = (position == "start") == (dockEdge == DockEdge.RIGHT)
+            handleLayoutParams.gravity = (if (atBottom) Gravity.BOTTOM else Gravity.TOP) or
+                    if (dockEdge == DockEdge.LEFT) Gravity.LEFT else Gravity.RIGHT
+            handleLayoutParams.x = handleEdgeOffset
+            handleLayoutParams.y = 0
+        }
         if (position == "end") {
             dockHandle.setBackgroundResource(R.drawable.dock_handle_bg_end)
             dockHandle.setCompoundDrawablesRelativeWithIntrinsicBounds(
@@ -2513,7 +2638,18 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     }
 
     override fun onTouch(view: View, motionEvent: MotionEvent): Boolean {
-        gestureDetector.onTouchEvent(motionEvent)
+        if (view === dock && dockEdge != DockEdge.BOTTOM) {
+            // The dock root is not turned like its contents, so turn its touches to match:
+            // a swipe away from the edge then still counts as a swipe up
+            val turned = MotionEvent.obtain(motionEvent)
+            turned.transform(Matrix().apply {
+                setRotate(if (dockEdge == DockEdge.RIGHT) 90f else -90f)
+            })
+            gestureDetector.onTouchEvent(turned)
+            turned.recycle()
+        } else {
+            gestureDetector.onTouchEvent(motionEvent)
+        }
         return false
     }
 
@@ -2533,6 +2669,9 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         try {
             windowManager.removeView(navBarSensor)
         } catch (_: Exception) {
+        }
+        displayListener?.let {
+            (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager).unregisterDisplayListener(it)
         }
         super.onDestroy()
     }
