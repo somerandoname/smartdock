@@ -49,6 +49,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.View.OnTouchListener
 import android.view.ViewPropertyAnimator
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.animation.AccelerateDecelerateInterpolator
@@ -187,6 +188,9 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private var iconPackUtils: IconPackUtils? = null
     private lateinit var dockBackgroundView: View
     private lateinit var dockBackgroundViewParams: WindowManager.LayoutParams
+    private lateinit var navBarSensor: View
+    private var navBarVisible = true
+    private var pendingDockRemoval = false
     override fun onCreate() {
         super.onCreate()
         db = DBHelper(this)
@@ -432,10 +436,8 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         ColorUtils.applyMainColor(context, sharedPreferences, dockBackgroundView)
         dockBackgroundView.setBackgroundResource(R.drawable.rect)
 
-        val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (!isDeviceLocked()) {
-            showDockViews()
-        }
+        setupNavBarSensor()
+        updateDockViews()
 
         //Hot corners
         topRightCorner = Button(context)
@@ -792,6 +794,88 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         return keyguardLocked || screenOff
     }
 
+    // Android 10 and older only: invisible, always-attached 1px window that reports
+    // whether the system navigation bar is showing. Newer versions ask the window
+    // manager directly in isNavBarVisible(), because an overlay window sits above the
+    // navigation bar and therefore never receives its insets.
+    private fun setupNavBarSensor() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) return
+        navBarSensor = View(context)
+        val params = Utils.makeWindowParams(1, 1, context, secondary).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        @Suppress("DEPRECATION")
+        navBarSensor.setOnSystemUiVisibilityChangeListener { visibility ->
+            onNavBarVisibilityChanged(visibility and View.SYSTEM_UI_FLAG_HIDE_NAVIGATION == 0)
+        }
+        try {
+            windowManager.addView(navBarSensor, params)
+        } catch (_: Exception) {}
+    }
+
+    private fun onNavBarVisibilityChanged(visible: Boolean) {
+        if (navBarVisible == visible) return
+        navBarVisible = visible
+        updateDockViews()
+    }
+
+    private fun isNavBarVisible(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return navBarVisible
+        return try {
+            windowManager.currentWindowMetrics.windowInsets
+                .isVisible(WindowInsets.Type.navigationBars())
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    // True for 3-button (0) and 2-button (1) navigation, false for gesture navigation (2).
+    // Devices without the setting or the system resource (pre-Android 10) only have buttons.
+    private fun hasNavigationButtons(): Boolean {
+        val mode = Settings.Secure.getInt(contentResolver, "navigation_mode", -1)
+        if (mode != -1) return mode != 2
+        val id = Resources.getSystem()
+            .getIdentifier("config_navBarInteractionMode", "integer", "android")
+        return id == 0 || Resources.getSystem().getInteger(id) != 2
+    }
+
+    // The dock follows the on-screen navigation buttons: unlocked, bar showing, button mode.
+    private fun shouldShowDock(): Boolean =
+        !isDeviceLocked() && hasNavigationButtons() && isNavBarVisible()
+
+    private fun updateDockViews() {
+        when {
+            shouldShowDock() -> {
+                if (pendingDockRemoval) {
+                    // Buttons came back while the dock was still sliding out
+                    pendingDockRemoval = false
+                    showDock()
+                } else {
+                    showDockViews()
+                }
+            }
+            // Nothing to animate behind the lock screen or with the screen off
+            isDeviceLocked() -> {
+                pendingDockRemoval = false
+                hideDockViews()
+            }
+            else -> slideOutDockViews()
+        }
+    }
+
+    // Slide the dock away with the regular hide animation, then remove its windows
+    private fun slideOutDockViews() {
+        if (pendingDockRemoval) return
+        if (dock.isAttachedToWindow && dockLayout.visibility == View.VISIBLE) {
+            pendingDockRemoval = true
+            hideDock()
+        } else {
+            hideDockViews()
+        }
+    }
+
     // Helper to safely add dock views
     private fun showDockViews() {
         try {
@@ -819,11 +903,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         // Handle lock/unlock events
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
             event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            if (isDeviceLocked()) {
-                hideDockViews()
-            } else {
-                showDockViews()
-            }
+            updateDockViews()
         }
 
         // Early exit if not pinned
@@ -1296,6 +1376,11 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                         windowManager.updateViewLayout(dock, dockLayoutParams)
                         windowManager.updateViewLayout(dockBackgroundView, dockBackgroundViewParams)
                     } catch (_: Exception) {}
+
+                    if (pendingDockRemoval) {
+                        pendingDockRemoval = false
+                        hideDockViews()
+                    }
                 }
             })
             start()
@@ -2395,9 +2480,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
                 }
                 Intent.ACTION_USER_PRESENT -> {
                     // User has unlocked the device
-                    if (!isDeviceLocked()) {
-                        showDockViews()
-                    }
+                    updateDockViews()
                 }
             }
         }
@@ -2445,6 +2528,10 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             windowManager.removeView(dock)
             windowManager.removeView(dockBackgroundView)
             unregisterReceiver(screenStateReceiver)
+        } catch (_: Exception) {
+        }
+        try {
+            windowManager.removeView(navBarSensor)
         } catch (_: Exception) {
         }
         super.onDestroy()
