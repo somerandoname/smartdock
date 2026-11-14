@@ -412,7 +412,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         }
 
         dockHeight =
-            Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+            computeDockHeight()
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         dockLayoutParams = Utils.makeWindowParams(-1, dockHeight, context, secondary)
         dockLayoutParams.screenOrientation =
@@ -450,7 +450,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             override fun onDisplayChanged(displayId: Int) {
                 // Flipping between the two landscape directions moves the navigation
                 // bar to the other side without any configuration change
-                if (computeDockEdge() != dockEdge) resetDockForRotation()
+                if (computeDockEdge() != dockEdge) resetDockForRotation() else syncDockHeight()
             }
         }
         (getSystemService(Context.DISPLAY_SERVICE) as DisplayManager)
@@ -696,6 +696,42 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
             } catch (_: Exception) {}
         }
         return DockEdge.BOTTOM
+    }
+
+    // Current size of the system navigation bar across its edge, or 0 if unknown
+    private fun navBarThickness(): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val insets = windowManager.currentWindowMetrics.windowInsets
+                    .getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
+                return maxOf(insets.left, insets.right, insets.bottom)
+            } catch (_: Exception) {}
+        }
+        return 0
+    }
+
+    // The dock ends flush with the navigation bar: its height is whatever the bar
+    // leaves above the fixed offset. Falls back to the dock_height setting when the
+    // bar size is unknown or would leave too little room.
+    private fun computeDockHeight(): Int {
+        val fitted = navBarThickness() - dockOffsetPx()
+        return if (fitted >= Utils.dpToPx(context, 24)) fitted
+        else Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+    }
+
+    // Resize a dock that is already showing after the navigation bar changed size
+    private fun syncDockHeight() {
+        val newHeight = computeDockHeight()
+        if (newHeight == dockHeight) return
+        if (dockShowAnimator?.isRunning == true || dockHideAnimator?.isRunning == true) return
+        dockHeight = newHeight
+        try {
+            if (dockLayout.visibility == View.VISIBLE) {
+                setEdgeThickness(dockLayoutParams, dockHeight)
+                windowManager.updateViewLayout(dock, dockLayoutParams)
+            }
+            updateDockBackgroundViewHeight()
+        } catch (_: Exception) {}
     }
 
     // On a side edge the dock strip is turned so it looks the same as in portrait
@@ -962,6 +998,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
     private fun updateDockViews() {
         when {
             shouldShowDock() -> {
+                syncDockHeight()
                 if (pendingDockRemoval) {
                     // Buttons came back while the dock was still sliding out
                     pendingDockRemoval = false
@@ -1321,7 +1358,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         }
 
         // Recalculate dimensions for the current orientation
-        dockHeight = Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+        dockHeight = computeDockHeight()
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         
         // Ensure background dimension is synced for coordination (without immediately firing updateViewLayout)
@@ -2091,7 +2128,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
 
     private fun updateDockHeight() {
         dockHeight =
-            Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+            computeDockHeight()
         val dockYOffset = Utils.dpToPx(context, sharedPreferences.getString("dock_y_offset", "0")!!.toInt())
         setEdgeThickness(dockLayoutParams, dockHeight)
         setEdgeOffset(dockLayoutParams, dockYOffset)
@@ -2222,7 +2259,7 @@ class DockService : AccessibilityService(), OnSharedPreferenceChangeListener, On
         val wasVisible = (dockLayout.visibility == View.VISIBLE || isPinned)
 
         // Recalculate dimensions for the new orientation BEFORE hiding instantly
-        dockHeight = Utils.dpToPx(context, sharedPreferences.getString("dock_height", "56")!!.toInt())
+        dockHeight = computeDockHeight()
 
         // Instantly reset the dock and background to their hidden/default state cleanly (single IPC update per view)
         hideDockInstantly()
